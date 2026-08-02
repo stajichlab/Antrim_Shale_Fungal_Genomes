@@ -1,0 +1,12 @@
+ASMID,SPECIES_IN,STRAIN,BIOPROJECT,NCBI_TAXONID,BUSCO_LINEAGE,PHYLUM,SUBPHYLUM,CLASS,SUBCLASS,ORDER,FAMILY,GENUS,SPECIES,TRANSL_TABLE,LOCUSTAG
+GCF_000365145.1_Phia_euro_CBS_101466_V1,Cyphellophora europaea,CBS 101466,,56186,eurotiomycetes_odb10,Ascomycota,,Eurotiomycetes,,Chaetothyriales,Herpotrichiellaceae,Cyphellophora,Cyphellophora europaea,1,F9287D16
+GCA_EXOPHIALA_002,Exophiala aquamarina,CBS 119918,,56184,eurotiomycetes_odb10,Ascomycota,,Eurotiomycetes,,Chaetothyriales,Herpotrichiellaceae,Exophiala,Exophiala aquamarina,1,F81EC6C7
+GCA_EXOPHIALA_003,Exophiala calicioides,JCM 6030,,56185,eurotiomycetes_odb10,Ascomycota,,Eurotiomycetes,,Chaetothyriales,Herpotrichiellaceae,Exophiala,Exophiala calicioides,1,F9B8CE75
+GCA_EXOPHIALA_004,Exophiala dermatitidis,EXF-9187,,56189,eurotiomycetes_odb10,Ascomycota,,Eurotiomycetes,,Chaetothyriales,Herpotrichiellaceae,Exophiala,Exophiala dermatitidis,1,F08A97A9
+GCA_EXOPHIALA_005,Exophiala lecanii-corni,CBS 102400,,1079749,eurotiomycetes_odb10,Ascomycota,,Eurotiomycetes,,Chaetothyriales,Herpotrichiellaceae,Exophiala,Exophiala lecanii-corni,1,F05584FD
+GCA_EXOPHIALA_006,Exophiala mansonii,UM1755,PRJNA1480101,91922,eurotiomycetes_odb10,Ascomycota,,Eurotiomycetes,,Chaetothyriales,Herpotrichiellaceae,Exophiala,Exophiala mansonii,1,AC4KHD
+GCA_EXOPHIALA_007,Exophiala mesophila,CBS 120910,,56193,eurotiomycetes_odb10,Ascomycota,,Eurotiomycetes,,Chaetothyriales,Herpotrichiellaceae,Exophiala,Exophiala mesophila,1,F4E7E16C
+GCA_EXOPHIALA_008,Exophiala mesophila,CBS 40295,,56193,eurotiomycetes_odb10,Ascomycota,,Eurotiomycetes,,Chaetothyriales,Herpotrichiellaceae,Exophiala,Exophiala mesophila,1,F59BDBC9
+GCA_EXOPHIALA_009,Exophiala mesophila,CCFEE_6314,,56193,eurotiomycetes_odb10,Ascomycota,,Eurotiomycetes,,Chaetothyriales,Herpotrichiellaceae,Exophiala,Exophiala mesophila,1,FFAFDB8E
+GCA_EXOPHIALA_010,Exophiala viscosa,JF_03-3F,,56196,eurotiomycetes_odb10,Ascomycota,,Eurotiomycetes,,Chaetothyriales,Herpotrichiellaceae,Exophiala,Exophiala viscosa,1,FF431F68
+GCA_030142925.1_UCR_TK_68,Exophiala xenobiotica,TK 68,,215383,eurotiomycetes_odb10,Ascomycota,,Eurotiomycetes,,Chaetothyriales,Herpotrichiellaceae,Exophiala,Exophiala xenobiotica,1,F5C60991

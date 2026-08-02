@@ -1,0 +1,12 @@
+GROUP,Species,Strain,Protein,DNA,Short,TaxonGroup
+IN,Exophiala mansonii,UM1755,Exophiala_mansonii_UM1755.proteins.fa,Exophiala_mansonii_UM1755.scaffolds.fa,EmUM1755,Emansonii
+IN,Exophiala mesophila,CBS 120910,Exophiala_mesophila_CBS_120910.proteins.fa,Exophiala_mesophila_CBS_120910.scaffolds.fa,EmC120910,Emesophila
+IN,Exophiala mesophila,CBS 40295,Exophiala_mesophila_CBS_40295.proteins.fa,Exophiala_mesophila_CBS_40295.scaffolds.fa,EmC40295,Emesophila
+IN,Exophiala mesophila,CCFEE 6314,Exophiala_mesophila_CCFEE_6314.proteins.fa,Exophiala_mesophila_CCFEE_6314.scaffolds.fa,EmCF6314,Emesophila
+OUT,Cyphellophora europaea,CBS 101466,Cyphellophora_europaea_CBS_101466.proteins.fa,Cyphellophora_europaea_CBS_101466.scaffolds.fa,CeC101466,Ceuropaea
+NEAR_IN,Exophiala aquamarina,CBS 119918,Exophiala_aquamarina_CBS_119918.proteins.fa,Exophiala_aquamarina_CBS_119918.scaffolds.fa,EaC119918,Eaquamarina
+NEAR_IN,Exophiala calicioides,JCM 6030,Exophiala_calicioides_JCM_6030.proteins.fa,Exophiala_calicioides_JCM_6030.scaffolds.fa,EcJ6030,Ecalicioides
+NEAR_IN,Exophiala dermatitidis,EXF-9187,Exophiala_dermatitidis_EXF-9187.proteins.fa,Exophiala_dermatitidis_EXF-9187.scaffolds.fa,EdEXF9187,Edermatitidis
+NEAR_IN,Exophiala lecanii-corni,CBS 102400,Exophiala_lecanii-corni_CBS_102400.proteins.fa,Exophiala_lecanii-corni_CBS_102400.scaffolds.fa,ElC102400,Elecanii-corni
+OUT,Exophiala viscosa,JF 03-3F,Exophiala_viscosa_JF_03-3F.proteins.fa,Exophiala_viscosa_JF_03-3F.scaffolds.fa,EvJF033F,Eviscosa
+OUT,Exophiala xenobiotica,TK 68,Exophiala_xenobiotica_TK_68.proteins.fa,Exophiala_xenobiotica_TK_68.scaffolds.fa,ExTK68,Exenobiotica
