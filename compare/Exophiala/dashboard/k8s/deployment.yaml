@@ -1,0 +1,202 @@
+# ---------------------------------------------------------------------------
+# Kubernetes manifests for bfd-chat
+# ---------------------------------------------------------------------------
+# Prereqs:
+#   1. Push the Docker image to a registry accessible from the NRP.ai cluster.
+#      Example with Docker Hub:
+#        docker tag bfd-chat:latest <your-dockerhub>/bfd-chat:latest
+#        docker push <your-dockerhub>/bfd-chat:latest
+#      Then update IMAGE below.
+#
+#   2. Ensure a PVC named "bfd-duckdb-pvc" exists with BFD.duckdb mounted at
+#      /data (read-only is enforced by the volumeMounts). Create it with:
+#        kubectl apply -f k8s/pvc.yaml
+#      (Adjust storageClassName for your cluster.)
+#
+#   3. Create a Kubernetes secret with your LLM credentials:
+#        kubectl apply -f k8s/secret.yaml
+#      Set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, or CUSTOM_LLM_*
+#      (See the comments in secret.yaml for all options.)
+#
+#   4. Deploy:
+#        kubectl apply -f k8s/deployment.yaml
+#        kubectl apply -f k8s/service.yaml
+#
+#   5. Get the external URL:
+#        kubectl get svc bfd-chat-svc
+# ---------------------------------------------------------------------------
+
+# ------------------------------ Secret ------------------------------------
+# Holds the LLM API key(s). Pick ONE provider section to populate.
+# The other env blocks are left as comments for reference.
+# IMPORTANT: base64-encode values in real use, or use sealed-secrets/bitnami-sealed-secret.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bfd-chat-llm-secrets
+  namespace: ucr-stajichlab # <-- change if deploying to a non-default namespace
+type: Opaque
+#stringData:
+
+  # ── Option A: Anthropic ──────────────────────────────────────────────────
+  # ANTHROPIC_API_KEY: "sk-ant-..."
+  # ANTHROPIC_MODEL: "claude-sonnet-5"
+
+  # ── Option B: OpenAI commercial ──────────────────────────────────────────
+  # OPENAI_API_KEY: "sk-..."
+  # OPENAI_MODEL: "gpt-4o"
+
+  # ── Option C: NRP.ai / OpenAI-compatible endpoint ────────────────────────
+  # Use this for the NRP.ai qwen3 or any other /v1/chat/completions server.
+  CUSTOM_LLM_BASE_URL: "https://ellm.nrp-nautilus.io/v1"
+  CUSTOM_LLM_API_KEY: "REPLACE_WITH_YOUR_NRP_TOKEN"    # set via: kubectl create secret generic ... --from-literal=CUSTOM_LLM_API_KEY=...
+  CUSTOM_LLM_MODEL: "qwen3"
+
+# ---------------------------- Deployment ----------------------------------
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bfd-chat
+  labels:
+    app: bfd-chat
+    component: chat-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bfd-chat
+  template:
+    metadata:
+      labels:
+        app: bfd-chat
+        component: chat-server
+    spec:
+      # Run as non-root (matches Dockerfile USER appuser)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+
+      containers:
+        - name: chat
+          # TODO: replace with your registry image path
+          # e.g.: docker.io/<your-username>/bfd-chat:latest
+          image: <your-registry>/bfd-chat:latest
+          imagePullPolicy: Always
+
+          ports:
+            - containerPort: 8000
+              name: http
+
+          # LLM credentials — all three vars are defined; only the one matching
+          # the secret section above will be non-empty and activate the right client.
+          envFrom:
+            - secretRef:
+                name: bfd-chat-llm-secrets
+
+          # DuckDB path; overridden at container start if you bind-mount elsewhere.
+          env:
+            - name: BFD_DUCKDB_PATH
+              value: "/data/BFD.duckdb"
+
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+
+          # K8s health probes
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # Mount BFD.duckdb read-only (read_only=True in code is the second layer)
+          volumeMounts:
+            - name: duckdb
+              mountPath: /data
+              readOnly: true
+
+      volumes:
+        - name: duckdb
+          persistentVolumeClaim:
+            # TODO: create this PVC first: kubectl apply -f k8s/pvc.yaml
+            claimName: bfd-duckdb-pvc
+
+# -------------------------------- Service ----------------------------------
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bfd-chat-svc
+  labels:
+    app: bfd-chat
+spec:
+  type: ClusterIP          # change to LoadBalancer or NodePort for external access
+  selector:
+    app: bfd-chat
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP
+
+# ------------------------------ Optional PVC --------------------------------
+# Uncomment and adjust storageClassName for your NRP.ai cluster storage backend.
+# The PVC should provision space for the 566 MB BFD.duckdb file.
+# Create BEFORE deploying the Deployment:
+#   kubectl apply -f k8s/deployment.yaml   # only after PVC exists
+#
+# ---
+ apiVersion: v1
+ kind: PersistentVolumeClaim
+ metadata:
+   name: bfd-duckdb-pvc
+ spec:
+   accessModes:
+     - ReadOnlyMany   # allows multiple pods (if scaling >1 replica) to mount read-only
+   storageClassName: rook-ceph  # e.g. "standard", "gp3", "rook-ceph-block"
+   resources:
+     requests:
+       storage: 5Gi
+
+# ------------------------------ Optional Ingress ----------------------------
+# Uncomment if you have an ingress controller (e.g. nginx-ingress, Traefik).
+# Adjust host and ingressClassName for your cluster.
+#
+# ---
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: bfd-chat-ingress
+# spec:
+#   ingressClassName: nginx
+#   rules:
+#     - host: bfd-chat.example.org
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: bfd-chat-svc
+#                 port:
+#                   number: 80
