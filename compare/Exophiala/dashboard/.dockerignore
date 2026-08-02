@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore
+.env
+.env*
+*.duckdb
+*.log
+node_modules/
+.DS_Store
+*.html
+cache/
+.nextflow/
+work/
