@@ -1,0 +1,39 @@
+# BFD Pipeline Parameters — Exophiala genomes
+# Usage: nextflow run ... -params-file BFD_exophiala_params.yaml
+
+# ── Input / Paths ──────────────────────────────────────────────────────────────
+pipeline: BFD
+samples: samples.csv
+
+run_setup: false
+pep_dir: input/pep
+genome_dir: input/dna
+
+# ── Output directories ─────────────────────────────────────────────────────────
+outdir: results/function
+genome_stats_outdir: results/genome_stats
+stats_outdir: results/seqstats
+
+# ── Functional annotation tools ────────────────────────────────────────────────
+skip_merge: false
+
+run_pfam: true
+run_cazy: true
+run_merops: true
+run_signalp: true
+run_tmhmm: true
+run_targetp: true
+run_idp: true
+run_wolfpsort: true
+run_predgpi: true
+
+# ── Sequence stats ─────────────────────────────────────────────────────────────
+run_aa_freq: true
+run_codon_freq: true
+
+# ── Other analyses (ASM-dependent / GFF3-dependent — will warn/skip) ──────────
+run_intergenic: true
+run_gene_stats: true
+run_asm_stats: true
+run_busco_genome: true
+run_busco_pep: true
