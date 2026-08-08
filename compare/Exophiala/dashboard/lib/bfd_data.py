@@ -546,8 +546,8 @@ def get_protein_length_distribution_matrix(con: duckdb.DuckDBPyConnection, rows:
 
 
 def get_gene_structure_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] | None = None) -> pd.DataFrame:
-    """Per-species gene structure metrics: mean exons/gene, mean intron length, total intergenic
-    distance. Intron density and gene spacing vary with GC%, chromatin compaction, and lifestyle.
+    """Per-species gene structure metrics: mean genes, gene length stats.
+    Intron density and gene spacing vary with GC%, chromatin compaction, and lifestyle.
 
     Returns empty DataFrame if gene_info lacks required columns (will be skipped in dashboard build).
     """
@@ -555,14 +555,15 @@ def get_gene_structure_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] | 
         struct_df = con.execute(
             """
             SELECT
-                species_prefix,
-                COUNT(DISTINCT gene_id) AS n_genes,
-                AVG(exons_per_gene) AS mean_exons,
-                AVG(intron_length) AS mean_intron_length,
-                AVG(gene_length) AS mean_gene_length
-            FROM gene_info
-            GROUP BY species_prefix
-            ORDER BY species_prefix
+                gp.species_prefix,
+                COUNT(DISTINCT gi.gene_id) AS n_genes,
+                AVG(gi.end - gi.start) AS mean_gene_length,
+                MIN(gi.end - gi.start) AS min_gene_length,
+                MAX(gi.end - gi.start) AS max_gene_length
+            FROM gene_info gi
+            JOIN gene_proteins gp ON gi.gene_id = gp.gene_id
+            GROUP BY gp.species_prefix
+            ORDER BY gp.species_prefix
             """
         ).fetchdf().set_index("species_prefix")
         struct_df = _filter_rows(struct_df, rows)
@@ -572,7 +573,7 @@ def get_gene_structure_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] | 
     except Exception as e:
         import sys
         print(f"Warning: gene_structure matrix unavailable: {e}", file=sys.stderr)
-        return pd.DataFrame()  # graceful fail if gene_info lacks structure columns
+        return pd.DataFrame()  # graceful fail if gene_info or gene_proteins schema unexpected
 
 
 def get_cazy_by_class_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] | None = None) -> pd.DataFrame:
