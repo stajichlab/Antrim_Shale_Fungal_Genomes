@@ -495,20 +495,30 @@ def get_transmembrane_domains_matrix(con: duckdb.DuckDBPyConnection, rows: list[
 
 
 def get_gc_normalized_domains(con: duckdb.DuckDBPyConnection, kind: str, rows: list[str] | None = None) -> pd.DataFrame:
-    """Domain matrix with GC-content regression removed. Eliminates compositional confounding
-    where domain differences track GC% bias rather than true functional divergence."""
-    from scipy import stats
+    """Domain matrix with GC-content regression removed (if GC data available).
+    Eliminates compositional confounding where domain differences track GC% bias rather than
+    true functional divergence. If GC column not in database, returns unregressed matrix."""
+    try:
+        from scipy import stats
+        species_df = get_species_table(con)
+        if "GC" not in species_df.columns:
+            raise KeyError("GC column not found")
 
-    domain_matrix = get_domain_matrix(con, kind, rows=rows)
-    gc_col = get_species_table(con)["GC"]
-    gc_col = gc_col.reindex(domain_matrix.index)
+        domain_matrix = get_domain_matrix(con, kind, rows=rows)
+        gc_col = species_df["GC"].reindex(domain_matrix.index)
 
-    residuals = pd.DataFrame(index=domain_matrix.index, columns=domain_matrix.columns)
-    for family in domain_matrix.columns:
-        slope, intercept, _, _, _ = stats.linregress(gc_col, domain_matrix[family])
-        residuals[family] = domain_matrix[family] - (slope * gc_col + intercept)
+        # Only regress if we have valid GC values
+        if gc_col.isna().any():
+            return domain_matrix  # fallback if GC data incomplete
 
-    return residuals.fillna(0.0)
+        residuals = pd.DataFrame(index=domain_matrix.index, columns=domain_matrix.columns)
+        for family in domain_matrix.columns:
+            slope, intercept, _, _, _ = stats.linregress(gc_col, domain_matrix[family])
+            residuals[family] = domain_matrix[family] - (slope * gc_col + intercept)
+        return residuals.fillna(0.0)
+    except (KeyError, ImportError):
+        # GC not available; return raw domain matrix
+        return get_domain_matrix(con, kind, rows=rows)
 
 
 def get_protein_length_distribution_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] | None = None) -> pd.DataFrame:

@@ -221,10 +221,22 @@ With n=11 genomes (10 Exophiala + 1 outgroup):
 ## Dependencies
 
 ### Required (already in environment)
-- scipy, numpy, pandas, scikit-learn
+- scipy, numpy, pandas
 
-### Optional
-- `pip install umap-learn` (for UMAP ordination)
+### For Alternative Ordinations (must install manually)
+- **scikit-learn**: Required for NMDS and t-SNE
+  ```bash
+  pip install scikit-learn
+  ```
+- **umap-learn**: Optional; for UMAP ordination
+  ```bash
+  pip install umap-learn
+  ```
+
+### Installation Notes
+- If sklearn is not available, dashboard defaults to PCoA only (graceful fallback)
+- t-SNE/NMDS/UMAP will report "failed" warnings but will not crash the build
+- Alternative ordinations are always optional; `--alt-ordinations` flag enables them
 
 ---
 
