@@ -602,6 +602,7 @@ def get_peptidase_class_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] |
     """MEROPS families by catalytic class (S/T/C/A/M/G/N/P). Protease specialization patterns
     indicate whether pathogen/endophyte leverages extracellular proteolysis (virulence) or
     intracellular degradation (nutrient mining)."""
+    _ensure_merops_family_view(con)  # Ensure the view exists before querying
     counts = con.execute(
         """
         SELECT
