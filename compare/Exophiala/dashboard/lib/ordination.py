@@ -125,6 +125,53 @@ def nmds(dist_df: pd.DataFrame, n_axes: int = 2, n_restarts: int = 20, seed: int
     return Ordination(coords_df, np.array([]), np.array([]), "nmds", {"stress": float(stress), "unreliable": stress > 0.2})
 
 
+def tsne(dist_df: pd.DataFrame, n_axes: int = 2, perplexity: float = 5.0, seed: int = 0) -> Ordination:
+    """t-SNE (nonlinear) on precomputed distance matrix. Perplexity typically 5-50; at n=11
+    defaults to 5 (must be < n/3). Returns with convergence flag for small-n caveat."""
+    from sklearn.manifold import TSNE
+
+    perplexity = min(perplexity, (dist_df.shape[0] - 1) / 3.0)
+    model = TSNE(
+        n_components=n_axes,
+        metric="precomputed",
+        random_state=seed,
+        perplexity=perplexity,
+        n_iter=1000,
+    )
+    coords = model.fit_transform(dist_df.values)
+    coords_df = pd.DataFrame(
+        coords, index=dist_df.index, columns=[f"tSNE{i+1}" for i in range(n_axes)]
+    )
+    return Ordination(coords_df, np.array([]), np.array([]), "tsne", {
+        "perplexity": float(perplexity),
+        "caveat": "t-SNE results are stochastic and data-dependent; stability across replicates is low at n=11"
+    })
+
+
+def umap_ordination(dist_df: pd.DataFrame, n_axes: int = 2, n_neighbors: int = 3, seed: int = 0) -> Ordination:
+    """UMAP on precomputed distance matrix. n_neighbors typically 5-15; at n=11 defaults to 3.
+    Returns with small-n caveat for stability."""
+    try:
+        import umap
+    except ImportError:
+        raise ImportError("umap-learn package required for UMAP; install with: pip install umap-learn")
+
+    model = umap.UMAP(
+        n_components=n_axes,
+        metric="precomputed",
+        n_neighbors=min(n_neighbors, dist_df.shape[0] - 1),
+        random_state=seed,
+    )
+    coords = model.fit_transform(dist_df.values)
+    coords_df = pd.DataFrame(
+        coords, index=dist_df.index, columns=[f"UMAP{i+1}" for i in range(n_axes)]
+    )
+    return Ordination(coords_df, np.array([]), np.array([]), "umap", {
+        "n_neighbors": min(n_neighbors, dist_df.shape[0] - 1),
+        "caveat": "UMAP balances local and global structure; stability at n=11 is limited"
+    })
+
+
 # --------------------------------------------------------------------------- PERMANOVA + dispersion
 @dataclass
 class GroupSeparationTest:
@@ -174,7 +221,10 @@ def permanova(dist_df: pd.DataFrame, groups: pd.Series, n_permutations: int = 99
     artifact rather than a true location difference."""
     dist = dist_df.values
     labels = groups.reindex(dist_df.index).values
-    group_sizes = groups.value_counts().to_dict()
+    # Must count sizes over `labels` (aligned to dist_df.index), not the raw `groups` Series --
+    # a caller passing a subset dist_df alongside the full-cohort groups Series would otherwise
+    # get permutation counts / caveats computed against genomes that aren't even being tested.
+    group_sizes = pd.Series(labels).value_counts().to_dict()
 
     observed_f = _pseudo_f(dist, labels)
     n_unique = _unique_permutation_count(list(group_sizes.values()))

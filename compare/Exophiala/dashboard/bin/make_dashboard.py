@@ -28,7 +28,7 @@ DOMAIN_KINDS = ["pfam", "cazy", "merops"]
 DIFF_TOP_N = 15
 
 
-def build_payload(db_path: Path, busco_dir: Path, tree_path: Path) -> dict:
+def build_payload(db_path: Path, busco_dir: Path, tree_path: Path, alt_ordinations: bool = False) -> dict:
     con = bd.get_connection(db_path)
     species_df = bd.get_species_table(con)
     busco_df = bd.get_busco_scores(busco_dir)
@@ -83,13 +83,48 @@ def build_payload(db_path: Path, busco_dir: Path, tree_path: Path) -> dict:
             )
 
         coords = ordination.coords.reindex(sp_order)
+        ordinations = {
+            cfg["method"]: {
+                "pct_variance": [float(x) for x in ordination.pct_variance[:4]],
+                "axes": list(coords.columns),
+                "coords": {c: [float(v) for v in coords[c]] for c in coords.columns},
+                "extra": ordination.extra,
+            }
+        }
+
+        if alt_ordinations and cfg["method"] != "ca":
+            for alt_method, alt_fn in [("nmds", ordi.nmds), ("tsne", ordi.tsne)]:
+                try:
+                    alt_ord = alt_fn(dist_for_stats)
+                    alt_coords = alt_ord.coords.reindex(sp_order)
+                    ordinations[alt_method] = {
+                        "pct_variance": [float(x) for x in alt_ord.pct_variance[:4]],
+                        "axes": list(alt_coords.columns),
+                        "coords": {c: [float(v) for v in alt_coords[c]] for c in alt_coords.columns},
+                        "extra": alt_ord.extra,
+                    }
+                except Exception as e:
+                    print(f"    {alt_method} failed: {e}", file=sys.stderr)
+
+            try:
+                umap_ord = ordi.umap_ordination(dist_for_stats)
+                umap_coords = umap_ord.coords.reindex(sp_order)
+                ordinations["umap"] = {
+                    "pct_variance": [float(x) for x in umap_ord.pct_variance[:4]],
+                    "axes": list(umap_coords.columns),
+                    "coords": {c: [float(v) for v in umap_coords[c]] for c in umap_coords.columns},
+                    "extra": umap_ord.extra,
+                }
+            except ImportError:
+                print(f"    umap: not installed (optional; pip install umap-learn)", file=sys.stderr)
+            except Exception as e:
+                print(f"    umap failed: {e}", file=sys.stderr)
+
         feature_sets_payload[name] = {
             "description": cfg.get("description", ""),
             "metric": cfg["metric"],
-            "method": cfg["method"],
-            "pct_variance": [float(x) for x in ordination.pct_variance[:4]],
-            "axes": list(coords.columns),
-            "coords": {c: [float(v) for v in coords[c]] for c in coords.columns},
+            "primary_method": cfg["method"],
+            "ordinations": ordinations,
             "permanova_genus": permanova_genus,
             "permanova_by_species": permanova_by_species,
         }
@@ -167,6 +202,7 @@ def main():
     ap.add_argument("--out", type=Path, default=DASHBOARD_DIR / "explorer.html")
     ap.add_argument("--compute", action="store_true")
     ap.add_argument("--render", action="store_true")
+    ap.add_argument("--alt-ordinations", action="store_true", help="Include NMDS, t-SNE, UMAP alongside default ordination")
     args = ap.parse_args()
 
     do_compute = args.compute or not (args.compute or args.render)
@@ -174,7 +210,7 @@ def main():
 
     if do_compute:
         print(f"Computing payload from {args.db} ...", file=sys.stderr)
-        payload = build_payload(args.db, args.busco_dir, args.tree)
+        payload = build_payload(args.db, args.busco_dir, args.tree, alt_ordinations=args.alt_ordinations)
         args.cache.parent.mkdir(parents=True, exist_ok=True)
         args.cache.write_text(json.dumps(payload))
         print(f"Wrote {args.cache} ({args.cache.stat().st_size:,} bytes)", file=sys.stderr)

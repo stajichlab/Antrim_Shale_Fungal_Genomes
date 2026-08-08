@@ -61,6 +61,83 @@ def schema_context(con: duckdb.DuckDBPyConnection) -> str:
     return "\n".join(lines)
 
 
+# --------------------------------------------------------------------------- curated notes for LLM
+# Deliberately hand-curated rather than scraped from docstrings: docstrings are dev-facing and
+# drift with refactors, so scraping them into a prompt would silently go stale. Keep this in sync
+# by hand whenever a normalization/analysis choice below changes.
+DATASET_NOTES = """\
+Dataset shape: 11 fungal genomes (mostly Exophiala spp.; one outgroup, Cyphellophora europaea).
+`species_prefix` (in per-hit tables like pfam/cazy/merops/signalp/...) and `LOCUSTAG` (in
+species/asm_stats/gene_info) are the SAME identifier for the same genome -- just named
+differently by table. Always join/filter genomes through one of these two columns.
+
+Normalization choices baked into the feature matrices (do not re-derive differently):
+- Pfam/CAZy/MEROPS domain-family counts are gene-count-normalized to "per 1000 genes" before
+  any distance/ordination step, because raw gene counts range 6,468-16,710 across these 11
+  genomes (2.6x) -- comparing raw counts would mostly measure genome/annotation size, not
+  domain content.
+- A family absent from a genome is a true zero (not missing data). Where a method needs
+  strictly positive values (log/fold-change), a single PSEUDOCOUNT=0.5 is added at matrix-build
+  time -- never re-add a different pseudocount downstream.
+- Assembly stats and the localization composite are z-scored per column (needed for Euclidean
+  distance across fields with very different scales/units).
+- Codon and amino-acid usage are compositional frequency profiles analyzed via correspondence
+  analysis (chi-square distance), not Euclidean/Bray-Curtis.
+
+Small-n caveats (n=11 total, and any taxon-filtered subset is smaller still):
+- PCoA/CA and PERMANOVA are unreliable at very small n: a 3-point configuration is exactly
+  planar and will spuriously "explain" ~100% of variance; PERMANOVA on a singleton group has
+  zero within-group variance by construction, which can look like a location effect when it is
+  really a dispersion artifact. The ordination/PERMANOVA tools enforce minimum-n floors and
+  attach caveat text directly in their output for exactly this reason -- always surface that
+  caveat text in the reply, don't drop it.
+- NMDS is intentionally not the default (needs multiple random restarts to avoid a degenerate
+  solution) -- offered only as an explicit opt-in, always reporting stress.
+- A domain-count ordination axis can reflect assembly/annotation quality (BUSCO completeness,
+  N50/contig count) or shared ancestry (phylogenetic relatedness) rather than a genuine
+  biological signal -- treat BUSCO/contiguity metadata and phylogenetic distance attached to
+  ordination results as confound checks, not decoration, especially for small subsets.
+- `differential_families`'s "rest of clade" comparison group shrinks with any taxon filter --
+  its output reports which genomes made up "rest" for exactly this reason; a "differs from
+  the rest" claim with a 2-genome rest group is "differs from one arbitrary other genome," not
+  a clade-level statement.
+"""
+
+
+def dataset_notes() -> str:
+    return DATASET_NOTES
+
+
+# --------------------------------------------------------------------------- taxa filtering
+def resolve_taxa_filter(
+    con: duckdb.DuckDBPyConnection,
+    genus: str | None = None,
+    species: str | None = None,
+    locustags: list[str] | None = None,
+    exclude_locustags: list[str] | None = None,
+) -> list[str]:
+    """Resolve a taxon description into a concrete list of LOCUSTAGs, for consistent subsetting
+    across every FEATURE_SETS loader and analysis tool. `genus`/`species` do a case-insensitive
+    substring match against the `species` table; `locustags` (if given) intersects with that
+    match instead of replacing it, so callers can combine e.g. genus="Exophiala" with an
+    explicit locustags allowlist. Returns LOCUSTAGs in species-table order (stable across calls).
+    """
+    sp = con.execute("SELECT LOCUSTAG, GENUS, SPECIES FROM species ORDER BY LOCUSTAG").fetchdf()
+    mask = pd.Series(True, index=sp.index)
+    if genus:
+        mask &= sp["GENUS"].str.contains(genus, case=False, na=False)
+    if species:
+        mask &= sp["SPECIES"].str.contains(species, case=False, na=False)
+    result = sp.loc[mask, "LOCUSTAG"].tolist()
+    if locustags:
+        wanted = set(locustags)
+        result = [lt for lt in result if lt in wanted]
+    if exclude_locustags:
+        excluded = set(exclude_locustags)
+        result = [lt for lt in result if lt not in excluded]
+    return result
+
+
 # --------------------------------------------------------------------------- species / overview
 def get_species_table(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     """v_species_summary (genome/annotation stats) joined with species (STRAIN, taxon id) --
@@ -102,26 +179,41 @@ def get_busco_scores(busco_dir: Path = DEFAULT_BUSCO_PROTEIN_DIR) -> pd.DataFram
     return pd.DataFrame.from_dict(rows, orient="index")
 
 
+def _filter_rows(df: pd.DataFrame, rows: list[str] | None) -> pd.DataFrame:
+    """Subset a genome-indexed matrix to `rows` (LOCUSTAGs/species_prefixes) BEFORE any
+    normalization that follows -- z-scoring/CA computed on the full cohort and then sliced
+    would leave a subset's "standardized" values centered/scaled on genomes not even in the
+    subset, which is invalid. Every FEATURE_SETS loader takes `rows` for exactly this reason."""
+    if rows is None:
+        return df
+    return df.loc[df.index.isin(rows)]
+
+
 # --------------------------------------------------------------------------- feature matrices
-def get_assembly_matrix(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
-    """Numeric assembly-stats block, standardized (z-score) per column."""
+def get_assembly_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] | None = None) -> pd.DataFrame:
+    """Numeric assembly-stats block, standardized (z-score) per column. `rows` (LOCUSTAGs)
+    subsets BEFORE z-scoring, so a taxon-filtered ordination is standardized on that subset,
+    not silently inheriting the full-cohort mean/std."""
     df = con.execute("SELECT * FROM asm_stats ORDER BY LOCUSTAG").fetchdf().set_index("LOCUSTAG")
     df = df.drop(columns=["ASMID"], errors="ignore")
+    df = _filter_rows(df, rows)
     numeric = df.select_dtypes(include="number")
     z = (numeric - numeric.mean()) / numeric.std(ddof=0).replace(0, 1)
     return z
 
 
-def get_codon_matrix(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+def get_codon_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] | None = None) -> pd.DataFrame:
     """species x codon frequency profile (rows ~sum to 1). Raw frequencies -- CA in
     ordination.py handles the compositional/chi-square structure directly, no transform here."""
     df = con.execute("SELECT species_prefix, codon, frequency FROM codon_frequency").fetchdf()
-    return df.pivot(index="species_prefix", columns="codon", values="frequency").fillna(0.0)
+    matrix = df.pivot(index="species_prefix", columns="codon", values="frequency").fillna(0.0)
+    return _filter_rows(matrix, rows)
 
 
-def get_aa_matrix(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+def get_aa_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] | None = None) -> pd.DataFrame:
     df = con.execute("SELECT species_prefix, amino_acid, frequency FROM aa_frequency").fetchdf()
-    return df.pivot(index="species_prefix", columns="amino_acid", values="frequency").fillna(0.0)
+    matrix = df.pivot(index="species_prefix", columns="amino_acid", values="frequency").fillna(0.0)
+    return _filter_rows(matrix, rows)
 
 
 _DOMAIN_TABLES = {
@@ -175,15 +267,20 @@ def _domain_table(con: duckdb.DuckDBPyConnection, kind: str) -> tuple[str, str]:
     return _DOMAIN_TABLES[kind]
 
 
-def get_domain_matrix(con: duckdb.DuckDBPyConnection, kind: str) -> pd.DataFrame:
+def get_domain_matrix(
+    con: duckdb.DuckDBPyConnection, kind: str, rows: list[str] | None = None
+) -> pd.DataFrame:
     """species x family RAW counts, gene-count-normalized (per 1000 genes) to avoid genome-size
-    artifacts -- gene counts here range 6,468-16,710 (2.6x) across the 11 genomes."""
+    artifacts -- gene counts here range 6,468-16,710 (2.6x) across the 11 genomes. Per-1000-genes
+    normalization is row-wise (each genome divided by its own gene_count), so `rows` subsetting
+    order doesn't change values here -- kept for API consistency with the other loaders."""
     table, family_col = _domain_table(con, kind)
     counts = con.execute(
         f"SELECT species_prefix, {family_col} AS family, COUNT(*) AS n "
         f"FROM {table} GROUP BY species_prefix, {family_col}"
     ).fetchdf()
     matrix = counts.pivot(index="species_prefix", columns="family", values="n").fillna(0.0)
+    matrix = _filter_rows(matrix, rows)
 
     gene_counts = get_species_table(con)["gene_count"]
     gene_counts = gene_counts.reindex(matrix.index)
@@ -213,19 +310,37 @@ def get_domain_example_proteins(
     return df["protein_id"].tolist()
 
 
+MIN_REST_GROUP_SIZE = 3  # below this, "differs from the rest" is really "differs from 1-2
+# arbitrary other genomes," not a clade-level statement -- see DATASET_NOTES.
+
+
 def differential_families(
-    con: duckdb.DuckDBPyConnection, kind: str, top_n: int = 15
+    con: duckdb.DuckDBPyConnection, kind: str, top_n: int = 15, rows: list[str] | None = None
 ) -> dict[str, dict]:
     """Per-species (focus) differential domain-family ranking against the gene-count-normalized
     matrix's mean-of-rest. NOT a z-score (n=10 'rest' group is too small/non-normal for that to
     mean what it implies) -- ranks by (1) presence/absence flags as the headline list, (2)
     fold-change over group mean (with PSEUDOCOUNT) as a secondary continuous rank. Each entry
-    carries a few example protein_ids for drill-down to specific genes."""
-    normalized = get_domain_matrix(con, kind)
+    carries a few example protein_ids for drill-down to specific genes.
+
+    `rows` restricts which genomes participate (both as focus species AND as the "rest" pool) --
+    every result also reports `rest_group` (the actual LOCUSTAGs averaged) and `rest_group_n`,
+    since a taxon-filtered "rest" can shrink to 1-2 genomes and stop meaning "the clade."
+    Raises ValueError if any species' rest-group would fall below MIN_REST_GROUP_SIZE, rather
+    than silently returning a claim that isn't a clade-level comparison anymore.
+    """
+    normalized = get_domain_matrix(con, kind, rows=rows)
+    if len(normalized) - 1 < MIN_REST_GROUP_SIZE:
+        raise ValueError(
+            f"Only {len(normalized)} genome(s) in this subset -- the 'rest of clade' comparison "
+            f"group would have {len(normalized) - 1}, below the minimum of {MIN_REST_GROUP_SIZE}. "
+            "Widen the taxon filter before running differential_families."
+        )
     pfam_accessions = get_pfam_accessions(con) if kind == "pfam" else {}
     result = {}
     for species in normalized.index:
-        rest_mean = normalized.drop(index=species).mean()
+        rest_group = [s for s in normalized.index if s != species]
+        rest_mean = normalized.loc[rest_group].mean()
         mine = normalized.loc[species]
 
         present_only = mine[(mine > 0) & (rest_mean == 0)].sort_values(ascending=False)
@@ -233,7 +348,7 @@ def differential_families(
         fold = (mine + PSEUDOCOUNT) / (rest_mean + PSEUDOCOUNT)
         log2fold = np.log2(fold).sort_values(key=np.abs, ascending=False)
 
-        def rows(series, value_label):
+        def family_rows(series, value_label):
             out = []
             for family, value in series.head(top_n).items():
                 row = {
@@ -249,9 +364,11 @@ def differential_families(
             return out
 
         result[species] = {
-            "present_only": rows(present_only, "value_per_1000"),
-            "absent_only": rows(absent_only, "value_per_1000"),
-            "top_fold_change": rows(log2fold, "log2_fold_change"),
+            "rest_group": rest_group,
+            "rest_group_n": len(rest_group),
+            "present_only": family_rows(present_only, "value_per_1000"),
+            "absent_only": family_rows(absent_only, "value_per_1000"),
+            "top_fold_change": family_rows(log2fold, "log2_fold_change"),
         }
     return result
 
@@ -307,12 +424,189 @@ def get_localization_fractions(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     return counts.div(gene_counts, axis=0).fillna(0.0)
 
 
-def get_localization_matrix(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+def get_localization_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] | None = None) -> pd.DataFrame:
     """Same fractions as get_localization_fractions, standardized (z-score) per column for
     ordination/PERMANOVA (euclidean distance needs comparable scales across very different
-    fraction magnitudes -- e.g. signalp_frac vs. gpi_frac)."""
+    fraction magnitudes -- e.g. signalp_frac vs. gpi_frac). `rows` subsets BEFORE z-scoring, same
+    reasoning as get_assembly_matrix."""
     block = get_localization_fractions(con)
+    block = _filter_rows(block, rows)
     return (block - block.mean()) / block.std(ddof=0).replace(0, 1)
+
+
+# --------------------------------------------------------------------------- enriched feature matrices for fine-grained analysis
+def get_secreted_domains_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] | None = None) -> pd.DataFrame:
+    """Domain families restricted to secreted proteins (SignalP+). Reveals secretome-specific
+    variation separately from intracellular domains, useful for pathogenicity/virulence genomics."""
+    table_pfam = "pfam"
+    counts = con.execute(
+        f"""
+        SELECT p.species_prefix, p.pfam_id AS family, COUNT(*) AS n
+        FROM {table_pfam} p
+        JOIN signalp s ON p.protein_id = s.protein_id
+        GROUP BY p.species_prefix, p.pfam_id
+        """
+    ).fetchdf()
+    matrix = counts.pivot(index="species_prefix", columns="family", values="n").fillna(0.0)
+    matrix = _filter_rows(matrix, rows)
+    gene_counts = get_species_table(con)["gene_count"]
+    gene_counts = gene_counts.reindex(matrix.index)
+    return matrix.div(gene_counts, axis=0) * 1000.0
+
+
+def get_cytoplasmic_domains_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] | None = None) -> pd.DataFrame:
+    """Domain families in proteins WITHOUT signal peptides. Isolates cytoplasmic/nuclear proteome
+    variation from membrane-biased secretome effects."""
+    table_pfam = "pfam"
+    counts = con.execute(
+        f"""
+        SELECT p.species_prefix, p.pfam_id AS family, COUNT(*) AS n
+        FROM {table_pfam} p
+        LEFT JOIN signalp s ON p.protein_id = s.protein_id
+        WHERE s.protein_id IS NULL
+        GROUP BY p.species_prefix, p.pfam_id
+        """
+    ).fetchdf()
+    matrix = counts.pivot(index="species_prefix", columns="family", values="n").fillna(0.0)
+    matrix = _filter_rows(matrix, rows)
+    gene_counts = get_species_table(con)["gene_count"]
+    gene_counts = gene_counts.reindex(matrix.index)
+    return matrix.div(gene_counts, axis=0) * 1000.0
+
+
+def get_transmembrane_domains_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] | None = None) -> pd.DataFrame:
+    """Domain families in proteins with TM helices (TMHMM > 0). Membrane protein repertoire
+    variation -- critical for ecological niche/host interaction."""
+    table_pfam = "pfam"
+    counts = con.execute(
+        f"""
+        SELECT p.species_prefix, p.pfam_id AS family, COUNT(*) AS n
+        FROM {table_pfam} p
+        JOIN tmhmm t ON p.protein_id = t.protein_id
+        WHERE t.PredHel > 0
+        GROUP BY p.species_prefix, p.pfam_id
+        """
+    ).fetchdf()
+    matrix = counts.pivot(index="species_prefix", columns="family", values="n").fillna(0.0)
+    matrix = _filter_rows(matrix, rows)
+    gene_counts = get_species_table(con)["gene_count"]
+    gene_counts = gene_counts.reindex(matrix.index)
+    return matrix.div(gene_counts, axis=0) * 1000.0
+
+
+def get_gc_normalized_domains(con: duckdb.DuckDBPyConnection, kind: str, rows: list[str] | None = None) -> pd.DataFrame:
+    """Domain matrix with GC-content regression removed. Eliminates compositional confounding
+    where domain differences track GC% bias rather than true functional divergence."""
+    from scipy import stats
+
+    domain_matrix = get_domain_matrix(con, kind, rows=rows)
+    gc_col = get_species_table(con)["GC"]
+    gc_col = gc_col.reindex(domain_matrix.index)
+
+    residuals = pd.DataFrame(index=domain_matrix.index, columns=domain_matrix.columns)
+    for family in domain_matrix.columns:
+        slope, intercept, _, _, _ = stats.linregress(gc_col, domain_matrix[family])
+        residuals[family] = domain_matrix[family] - (slope * gc_col + intercept)
+
+    return residuals.fillna(0.0)
+
+
+def get_protein_length_distribution_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] | None = None) -> pd.DataFrame:
+    """Per-species protein-length statistics (mean, median, std, skewness). Genome-wide
+    variation in proteome 'architecture' -- correlates with lifestyle (parasitic/saprobic)."""
+    stats_df = con.execute(
+        """
+        SELECT
+            species_prefix,
+            COUNT(*) AS n_proteins,
+            AVG(length) AS mean_length,
+            APPROX_QUANTILE(length, 0.5) AS median_length,
+            STDDEV_POP(length) AS std_length,
+            MIN(length) AS min_length,
+            MAX(length) AS max_length
+        FROM gene_proteins
+        GROUP BY species_prefix
+        ORDER BY species_prefix
+        """
+    ).fetchdf().set_index("species_prefix")
+    stats_df = _filter_rows(stats_df, rows)
+    numeric = stats_df.select_dtypes(include="number")
+    z = (numeric - numeric.mean()) / numeric.std(ddof=0).replace(0, 1)
+    return z
+
+
+def get_gene_structure_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] | None = None) -> pd.DataFrame:
+    """Per-species gene structure metrics: mean exons/gene, mean intron length, total intergenic
+    distance. Intron density and gene spacing vary with GC%, chromatin compaction, and lifestyle."""
+    try:
+        struct_df = con.execute(
+            """
+            SELECT
+                species_prefix,
+                COUNT(DISTINCT gene_id) AS n_genes,
+                AVG(exons_per_gene) AS mean_exons,
+                AVG(intron_length) AS mean_intron_length,
+                AVG(gene_length) AS mean_gene_length
+            FROM gene_info
+            GROUP BY species_prefix
+            ORDER BY species_prefix
+            """
+        ).fetchdf().set_index("species_prefix")
+        struct_df = _filter_rows(struct_df, rows)
+        numeric = struct_df.select_dtypes(include="number")
+        z = (numeric - numeric.mean()) / numeric.std(ddof=0).replace(0, 1)
+        return z
+    except Exception:
+        return pd.DataFrame()  # graceful fail if gene_info lacks structure columns
+
+
+def get_cazy_by_class_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] | None = None) -> pd.DataFrame:
+    """CAZy families grouped into functional classes (GH/GT/PL/CE/AA/CBM). Reveals carbohydrate
+    degradation capability profiles (e.g. cellulolytic vs. hemicellulolytic specialization)."""
+    counts = con.execute(
+        """
+        SELECT
+            species_prefix,
+            CASE
+                WHEN HMM_id LIKE 'GH%' THEN 'GH (Glycoside Hydrolase)'
+                WHEN HMM_id LIKE 'GT%' THEN 'GT (Glycosyl Transferase)'
+                WHEN HMM_id LIKE 'PL%' THEN 'PL (Polysaccharide Lyase)'
+                WHEN HMM_id LIKE 'CE%' THEN 'CE (Carbohydrate Esterase)'
+                WHEN HMM_id LIKE 'AA%' THEN 'AA (Auxiliary Activity)'
+                WHEN HMM_id LIKE 'CBM%' THEN 'CBM (Carbohydrate Binding)'
+                ELSE 'Unknown'
+            END AS cazy_class,
+            COUNT(*) AS n
+        FROM cazy
+        GROUP BY species_prefix, cazy_class
+        """
+    ).fetchdf()
+    matrix = counts.pivot(index="species_prefix", columns="cazy_class", values="n").fillna(0.0)
+    matrix = _filter_rows(matrix, rows)
+    gene_counts = get_species_table(con)["gene_count"]
+    gene_counts = gene_counts.reindex(matrix.index)
+    return matrix.div(gene_counts, axis=0) * 1000.0
+
+
+def get_peptidase_class_matrix(con: duckdb.DuckDBPyConnection, rows: list[str] | None = None) -> pd.DataFrame:
+    """MEROPS families by catalytic class (S/T/C/A/M/G/N/P). Protease specialization patterns
+    indicate whether pathogen/endophyte leverages extracellular proteolysis (virulence) or
+    intracellular degradation (nutrient mining)."""
+    counts = con.execute(
+        """
+        SELECT
+            species_prefix,
+            SUBSTR(family, 1, 1) AS pep_class,
+            COUNT(*) AS n
+        FROM v_merops_family
+        GROUP BY species_prefix, pep_class
+        """
+    ).fetchdf()
+    matrix = counts.pivot(index="species_prefix", columns="pep_class", values="n").fillna(0.0)
+    matrix = _filter_rows(matrix, rows)
+    gene_counts = get_species_table(con)["gene_count"]
+    gene_counts = gene_counts.reindex(matrix.index)
+    return matrix.div(gene_counts, axis=0) * 1000.0
 
 
 FEATURE_SETS = {
@@ -329,15 +623,18 @@ FEATURE_SETS = {
         "description": "Amino-acid usage frequency profile (all 20 residues).",
     },
     "pfam": {
-        "loader": lambda con: get_domain_matrix(con, "pfam"), "metric": "bray-curtis", "method": "pcoa",
+        "loader": lambda con, rows=None: get_domain_matrix(con, "pfam", rows=rows),
+        "metric": "bray-curtis", "method": "pcoa",
         "description": "Pfam domain-family content, gene-count-normalized.",
     },
     "cazy": {
-        "loader": lambda con: get_domain_matrix(con, "cazy"), "metric": "bray-curtis", "method": "pcoa",
+        "loader": lambda con, rows=None: get_domain_matrix(con, "cazy", rows=rows),
+        "metric": "bray-curtis", "method": "pcoa",
         "description": "CAZy carbohydrate-active-enzyme family content, gene-count-normalized.",
     },
     "merops": {
-        "loader": lambda con: get_domain_matrix(con, "merops"), "metric": "bray-curtis", "method": "pcoa",
+        "loader": lambda con, rows=None: get_domain_matrix(con, "merops", rows=rows),
+        "metric": "bray-curtis", "method": "pcoa",
         "description": "MEROPS peptidase family content, gene-count-normalized.",
     },
     "localization": {
@@ -348,6 +645,44 @@ FEATURE_SETS = {
             "transmembrane-helix count, TargetP secretion, PredGPI GPI-anchor, IDP "
             "intrinsic-disorder, WoLF PSORT extracellular."
         ),
+    },
+    "secreted_pfam": {
+        "loader": get_secreted_domains_matrix, "metric": "bray-curtis", "method": "pcoa",
+        "description": "Pfam domains restricted to secreted proteins (SignalP+). Isolates secretome variation from cytoplasmic proteome.",
+    },
+    "cytoplasmic_pfam": {
+        "loader": get_cytoplasmic_domains_matrix, "metric": "bray-curtis", "method": "pcoa",
+        "description": "Pfam domains in non-secreted proteins. Reveals intracellular/nuclear proteome repertoire.",
+    },
+    "transmembrane_pfam": {
+        "loader": get_transmembrane_domains_matrix, "metric": "bray-curtis", "method": "pcoa",
+        "description": "Pfam domains in proteins with transmembrane helices. Membrane proteome specialization.",
+    },
+    "gc_normalized_pfam": {
+        "loader": lambda con, rows=None: get_gc_normalized_domains(con, "pfam", rows=rows),
+        "metric": "bray-curtis", "method": "pcoa",
+        "description": "Pfam domains with GC%-content regressed out. Removes compositional confounding.",
+    },
+    "gc_normalized_cazy": {
+        "loader": lambda con, rows=None: get_gc_normalized_domains(con, "cazy", rows=rows),
+        "metric": "bray-curtis", "method": "pcoa",
+        "description": "CAZy families with GC%-content regressed out.",
+    },
+    "protein_length": {
+        "loader": get_protein_length_distribution_matrix, "metric": "euclidean", "method": "pcoa",
+        "description": "Proteome-wide protein-length statistics (mean, median, std, range). Architecture of protein repertoire.",
+    },
+    "gene_structure": {
+        "loader": get_gene_structure_matrix, "metric": "euclidean", "method": "pcoa",
+        "description": "Gene structural metrics: exon count, intron length, gene length. Genome compaction and intron density patterns.",
+    },
+    "cazy_by_class": {
+        "loader": get_cazy_by_class_matrix, "metric": "bray-curtis", "method": "pcoa",
+        "description": "CAZy families grouped by catalytic class (GH/GT/PL/CE/AA/CBM). Carbohydrate degradation capability profile.",
+    },
+    "peptidase_class": {
+        "loader": get_peptidase_class_matrix, "metric": "bray-curtis", "method": "pcoa",
+        "description": "MEROPS peptidases grouped by catalytic class (S/T/C/A/M/G/N/P). Protease specialization patterns.",
     },
 }
 
