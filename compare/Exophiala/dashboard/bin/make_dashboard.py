@@ -66,6 +66,10 @@ def build_payload(db_path: Path, busco_dir: Path, tree_path: Path, alt_ordinatio
         print(f"  feature set: {name}", file=sys.stderr)
         matrix = cfg["loader"](con).reindex(sp_order).fillna(0.0)
 
+        if matrix.shape[1] == 0:
+            print(f"    skipped: loader returned 0 columns", file=sys.stderr)
+            continue
+
         if cfg["method"] == "ca":
             ordination = ordi.correspondence_analysis(matrix)
             dist_for_stats = ordi.distance_matrix(matrix, "euclidean")
@@ -195,6 +199,22 @@ def pd_isna(v) -> bool:
         return v is None
 
 
+def sanitize_payload(obj):
+    """Recursively replace inf/-inf/nan with None (JSON-safe null)."""
+    import math
+
+    if isinstance(obj, dict):
+        return {k: sanitize_payload(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_payload(v) for v in obj]
+    elif isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    else:
+        return obj
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", type=Path, default=bd.DEFAULT_DB_PATH)
@@ -213,6 +233,7 @@ def main():
     if do_compute:
         print(f"Computing payload from {args.db} ...", file=sys.stderr)
         payload = build_payload(args.db, args.busco_dir, args.tree, alt_ordinations=args.alt_ordinations)
+        payload = sanitize_payload(payload)  # Replace inf/nan with null
         args.cache.parent.mkdir(parents=True, exist_ok=True)
         args.cache.write_text(json.dumps(payload))
         print(f"Wrote {args.cache} ({args.cache.stat().st_size:,} bytes)", file=sys.stderr)
