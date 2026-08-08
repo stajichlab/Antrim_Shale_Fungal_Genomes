@@ -83,21 +83,27 @@ def build_payload(db_path: Path, busco_dir: Path, tree_path: Path, alt_ordinatio
             )
 
         coords = ordination.coords.reindex(sp_order)
-        ordinations = {
-            cfg["method"]: {
-                "pct_variance": [float(x) for x in ordination.pct_variance[:4]],
-                "axes": list(coords.columns),
-                "coords": {c: [float(v) for v in coords[c]] for c in coords.columns},
-                "extra": ordination.extra,
-            }
+
+        # Backward-compatible structure: primary ordination at top level
+        feature_set_data = {
+            "description": cfg.get("description", ""),
+            "metric": cfg["metric"],
+            "method": cfg["method"],
+            "pct_variance": [float(x) for x in ordination.pct_variance[:4]],
+            "axes": list(coords.columns),
+            "coords": {c: [float(v) for v in coords[c]] for c in coords.columns},
+            "permanova_genus": permanova_genus,
+            "permanova_by_species": permanova_by_species,
         }
 
+        # Optional: add alternative ordinations as nested data
         if alt_ordinations and cfg["method"] != "ca":
+            alt_ordinations_data = {}
             for alt_method, alt_fn in [("nmds", ordi.nmds), ("tsne", ordi.tsne)]:
                 try:
                     alt_ord = alt_fn(dist_for_stats)
                     alt_coords = alt_ord.coords.reindex(sp_order)
-                    ordinations[alt_method] = {
+                    alt_ordinations_data[alt_method] = {
                         "pct_variance": [float(x) for x in alt_ord.pct_variance[:4]],
                         "axes": list(alt_coords.columns),
                         "coords": {c: [float(v) for v in alt_coords[c]] for c in alt_coords.columns},
@@ -109,7 +115,7 @@ def build_payload(db_path: Path, busco_dir: Path, tree_path: Path, alt_ordinatio
             try:
                 umap_ord = ordi.umap_ordination(dist_for_stats)
                 umap_coords = umap_ord.coords.reindex(sp_order)
-                ordinations["umap"] = {
+                alt_ordinations_data["umap"] = {
                     "pct_variance": [float(x) for x in umap_ord.pct_variance[:4]],
                     "axes": list(umap_coords.columns),
                     "coords": {c: [float(v) for v in umap_coords[c]] for c in umap_coords.columns},
@@ -120,14 +126,10 @@ def build_payload(db_path: Path, busco_dir: Path, tree_path: Path, alt_ordinatio
             except Exception as e:
                 print(f"    umap failed: {e}", file=sys.stderr)
 
-        feature_sets_payload[name] = {
-            "description": cfg.get("description", ""),
-            "metric": cfg["metric"],
-            "primary_method": cfg["method"],
-            "ordinations": ordinations,
-            "permanova_genus": permanova_genus,
-            "permanova_by_species": permanova_by_species,
-        }
+            if alt_ordinations_data:
+                feature_set_data["alt_ordinations"] = alt_ordinations_data
+
+        feature_sets_payload[name] = feature_set_data
 
         if name in DOMAIN_KINDS:
             differential_payload[name] = bd.differential_families(con, name, top_n=DIFF_TOP_N)
