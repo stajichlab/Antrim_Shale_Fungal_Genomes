@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>Genome &amp; Domain Comparison: Exophiala</title>
+  <style>
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    span.underline{text-decoration: underline;}
+    div.column{display: inline-block; vertical-align: top; width: 50%;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    ul.task-list{list-style: none;}
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="" />
+  <!--[if lt IE 9]>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/html5shiv/3.7.3/html5shiv-printshiv.min.js"></script>
+  <![endif]-->
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">Genome &amp; Domain Comparison: Exophiala</h1>
+</header>
+<h1 id="genome--domain-comparison-exophiala">Genome &amp; Domain
+Comparison: <em>Exophiala</em></h1>
+<p>I've been building tools to look at genome and domain data at a high
+level.</p>
+<p>The units of comparison here are all at the gene / protein level, so
+if there are allele or transcription-factor (TF) binding site
+differences that change regulation, this of course isn't picking that
+up.</p>
+<h2 id="two-sets-of-questions">Two sets of questions</h2>
+<h3 id="1-overall-composition--do-any-factors-separate-the-taxa">1.
+Overall composition — do any factors separate the taxa?</h3>
+<p><strong>Exploration dashboard:</strong> <a
+href="https://cluster.hpcc.ucr.edu/~jstajich/projects/SSF/Exophiala/dashboard/explorer.html">https://cluster.hpcc.ucr.edu/~jstajich/projects/SSF/Exophiala/dashboard/explorer.html</a></p>
+<p>This dashboard has several interactive panels with precomputed data
+around the ordination of total content across different classes, plus
+some more specific content comparisons and enrichment identification.
+One thing that popped out is an excess of <a
+href="https://www.ebi.ac.uk/interpro/entry/pfam/PF07110/">EthD domains
+(Pfam PF07110)</a> involved in degrading the hydrocarbon ethyl
+<em>tert</em>-butyl ether. I still want to confirm all the numbers, but
+right now the analysis says 20 copies in <em>E. mansonii</em> and only a
+few in the related <em>E. mesophila</em> and the other species.</p>
+<p>The tool that displays things was put together with help from AI. The
+database backing it was also constructed using some AI-generated
+prompts, but it relies on standard tools for the sequence alignments and
+calls.</p>
+<p>There's more to look through, but this was a starting place to
+examine.</p>
+<h3
+id="2-are-there-novel-genes-that-define-this-lineage-or-group-of-lineages">2.
+Are there novel genes that define this lineage (or group of
+lineages)?</h3>
+<p>The question is whether, when we start to compare <em>E.
+mansonii</em> (the first genome from this species) to its relatives,
+there are novel genes that define this lineage. I built another tool —
+which I'm calling <strong>NovInvenio</strong> for now — that tries to
+pick out novelty. I've been training and parameterizing it on things
+like the <em>Hex</em> genes in <em>Neurospora</em> that are unique to
+filamentous fungi, to see what molecular synapomorphies are
+identifiable.</p>
+<p>It has an ingroup and outgroup designation, and we look for genes
+that fall into the category of being unique to an ingroup. I have some
+"NEAR" ingroups which are compared but aren't part of the novelty
+assessment, to cut down on the number of pairwise searches — similarly
+some "BROAD" outgroups that can be used to examine uniqueness further
+but aren't part of the novelty assessment tool. All of this is a work in
+progress, but I'm building it up as Nextflow workflows so it's easy to
+change datasets and try a different set.</p>
+<ul>
+<li><strong><a
+href="https://cluster.hpcc.ucr.edu/~jstajich/projects/SSF/Exophiala/view/Exophiala/report.html">NovInvenio
+report</a></strong></li>
+<li><strong><a
+href="https://cluster.hpcc.ucr.edu/~jstajich/projects/SSF/Exophiala/view/Exophiala/novelties.html">Novelties
+page</a></strong> — has a heatmap by default of the presence/absence
+table. You can sort things with the dropdown and restrict to see only
+the novelty in one of the ingroups. You can also search for known Pfam
+domains to see what genes match, and sort by chromosome position so you
+can see it walking from one end to another (one might expect the
+telomeric region to have more novelty in some species, for example). The
+TBLASTN tickbox is a further check for annotation uncertainty: if we
+couldn't find the protein in the other species but can find it by
+TBLASTN, maybe it's a cryptic gene that wasn't predicted. The e-value
+cutoffs are probably important to adjust here to make this more useful;
+right now it's just an on/off tickbox. If you click on a gene name on
+the left, it brings up a panel with the protein sequence so you can run
+a BLAST or follow linkouts to the Pfam domains.</li>
+</ul>
+<h2 id="other-pages-still-need-work">Other pages (still need work)</h2>
+<p>These show genes found in everyone. I did not integrate the Pfam
+domains yet (right now I only compute Pfam on the genes that fall in the
+novelty class, for speed, since I'm iterating a bit), but you can get a
+sense of what the patterns are for genes found in all species if we
+decorate this more.</p>
+<ul>
+<li><strong><a
+href="https://cluster.hpcc.ucr.edu/~jstajich/projects/SSF/Exophiala/view/Exophiala/core.html">Core
+genes</a></strong></li>
+</ul>
+<p>Then there's the loss page, which shows genes we infer to be lost in
+the ingroup. These might reflect another type of adaptation where the
+ingroup has lost a collection of genes.</p>
+<ul>
+<li><strong><a
+href="https://cluster.hpcc.ucr.edu/~jstajich/projects/SSF/Exophiala/view/Exophiala/losses.html">Gene
+losses</a></strong></li>
+</ul>
+</body>
+</html>
